@@ -1,0 +1,47 @@
+From 47d31f4113429f8c99935f4d5c5115d7462bf8c0 Mon Sep 17 00:00:00 2001
+From: Pawel Osciak <posciak@chromium.org>
+Date: Tue, 1 Mar 2016 10:23:23 +0800
+Subject: [PATCH] v4l: Add private compound control type.
+
+V4L2_CTRL_TYPE_PRIVATE is to be used for private driver compound
+controls that use the "ptr" member of struct v4l2_ext_control.
+
+Signed-off-by: Pawel Osciak <posciak@chromium.org>
+Signed-off-by: Jung Zhao <jung.zhao@rock-chips.com>
+Signed-off-by: Florent Revest <florent.revest@free-electrons.com>
+---
+ drivers/media/v4l2-core/v4l2-ctrls.c | 4 ++++
+ include/uapi/linux/videodev2.h       | 2 ++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/drivers/media/v4l2-core/v4l2-ctrls.c b/drivers/media/v4l2-core/v4l2-ctrls.c
+index b518438e7b75..dbb900eed37f 100644
+--- a/drivers/media/v4l2-core/v4l2-ctrls.c
++++ b/drivers/media/v4l2-core/v4l2-ctrls.c
+@@ -1544,6 +1544,10 @@ static int std_validate(const struct v4l2_ctrl *ctrl, u32 idx,
+ 			return -ERANGE;
+ 		return 0;
+ 
++	/* FIXME:just return 0 for now */
++	case V4L2_CTRL_TYPE_PRIVATE:
++		return 0;
++
+ 	default:
+ 		return -EINVAL;
+ 	}
+diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
+index 31f832793ef1..01c8bfc2fd21 100644
+--- a/include/uapi/linux/videodev2.h
++++ b/include/uapi/linux/videodev2.h
+@@ -1543,6 +1543,8 @@ enum v4l2_ctrl_type {
+ 	V4L2_CTRL_TYPE_U8	     = 0x0100,
+ 	V4L2_CTRL_TYPE_U16	     = 0x0101,
+ 	V4L2_CTRL_TYPE_U32	     = 0x0102,
++
++	V4L2_CTRL_TYPE_PRIVATE       = 0xffff,
+ };
+ 
+ /*  Used in the VIDIOC_QUERYCTRL ioctl for querying controls */
+-- 
+2.14.3
+

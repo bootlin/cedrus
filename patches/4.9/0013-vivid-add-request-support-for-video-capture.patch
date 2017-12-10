@@ -1,0 +1,83 @@
+From 82feaa6d1f42c13ec81333d0586cdbc5fa585ba8 Mon Sep 17 00:00:00 2001
+From: Hans Verkuil <hans.verkuil@cisco.com>
+Date: Mon, 13 Apr 2015 15:54:13 +0200
+Subject: [PATCH] vivid: add request support for video capture.
+
+In order to test the request API in applications we add request support to
+vivid. The brightness, contrast, saturation and hue controls now can be used
+in requests. Those were chosen because the test pattern generator supports
+those controls and will adjust the TPG colors accordingly, so this gives a
+good visual feedback.
+
+Just before a buffer with a specific request is ready to be filled, any
+controls set for that request are applied and the TPG will use the new
+values for filling in the buffer, so this matches what a well-written driver
+will do in actual hardware.
+
+Finally, support for req_queue is added using the new v4l2_device_req_queue
+helper function.
+
+Signed-off-by: Hans Verkuil <hans.verkuil@cisco.com>
+---
+ drivers/media/platform/vivid/vivid-core.c        | 2 ++
+ drivers/media/platform/vivid/vivid-ctrls.c       | 4 ++++
+ drivers/media/platform/vivid/vivid-kthread-cap.c | 2 ++
+ 3 files changed, 8 insertions(+)
+
+diff --git a/drivers/media/platform/vivid/vivid-core.c b/drivers/media/platform/vivid/vivid-core.c
+index 5464fefbaab9..bbae1f11d40b 100644
+--- a/drivers/media/platform/vivid/vivid-core.c
++++ b/drivers/media/platform/vivid/vivid-core.c
+@@ -666,6 +666,7 @@ static int vivid_create_instance(struct platform_device *pdev, int inst)
+ 		return ret;
+ 	}
+ 	dev->v4l2_dev.release = vivid_dev_release;
++	dev->v4l2_dev.req_queue = v4l2_device_req_queue;
+ 
+ 	/* start detecting feature set */
+ 
+@@ -1053,6 +1054,7 @@ static int vivid_create_instance(struct platform_device *pdev, int inst)
+ 		q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+ 		q->min_buffers_needed = 2;
+ 		q->lock = &dev->mutex;
++		q->v4l2_allow_requests = 1;
+ 
+ 		ret = vb2_queue_init(q);
+ 		if (ret)
+diff --git a/drivers/media/platform/vivid/vivid-ctrls.c b/drivers/media/platform/vivid/vivid-ctrls.c
+index aceb38d9f7e7..3b1949610f5d 100644
+--- a/drivers/media/platform/vivid/vivid-ctrls.c
++++ b/drivers/media/platform/vivid/vivid-ctrls.c
+@@ -1387,12 +1387,16 @@ int vivid_create_controls(struct vivid_dev *dev, bool show_ccs_cap,
+ 			V4L2_CID_BRIGHTNESS, 0, 255, 1, 128);
+ 		for (i = 0; i < MAX_INPUTS; i++)
+ 			dev->input_brightness[i] = 128;
++		v4l2_ctrl_s_max_reqs(dev->brightness, VIDEO_MAX_FRAME);
+ 		dev->contrast = v4l2_ctrl_new_std(hdl_user_vid, &vivid_user_vid_ctrl_ops,
+ 			V4L2_CID_CONTRAST, 0, 255, 1, 128);
++		v4l2_ctrl_s_max_reqs(dev->contrast, VIDEO_MAX_FRAME);
+ 		dev->saturation = v4l2_ctrl_new_std(hdl_user_vid, &vivid_user_vid_ctrl_ops,
+ 			V4L2_CID_SATURATION, 0, 255, 1, 128);
++		v4l2_ctrl_s_max_reqs(dev->saturation, VIDEO_MAX_FRAME);
+ 		dev->hue = v4l2_ctrl_new_std(hdl_user_vid, &vivid_user_vid_ctrl_ops,
+ 			V4L2_CID_HUE, -128, 128, 1, 0);
++		v4l2_ctrl_s_max_reqs(dev->hue, VIDEO_MAX_FRAME);
+ 		v4l2_ctrl_new_std(hdl_user_vid, &vivid_user_vid_ctrl_ops,
+ 			V4L2_CID_HFLIP, 0, 1, 1, 0);
+ 		v4l2_ctrl_new_std(hdl_user_vid, &vivid_user_vid_ctrl_ops,
+diff --git a/drivers/media/platform/vivid/vivid-kthread-cap.c b/drivers/media/platform/vivid/vivid-kthread-cap.c
+index 6ca71aabb576..326eb37ef047 100644
+--- a/drivers/media/platform/vivid/vivid-kthread-cap.c
++++ b/drivers/media/platform/vivid/vivid-kthread-cap.c
+@@ -700,6 +700,8 @@ static void vivid_thread_vid_cap_tick(struct vivid_dev *dev, int dropped_bufs)
+ 	if (!list_empty(&dev->vid_cap_active)) {
+ 		vid_cap_buf = list_entry(dev->vid_cap_active.next, struct vivid_buffer, list);
+ 		list_del(&vid_cap_buf->list);
++		v4l2_ctrl_apply_request(dev->vid_cap_dev.ctrl_handler,
++					vid_cap_buf->vb.request);
+ 	}
+ 	if (!list_empty(&dev->vbi_cap_active)) {
+ 		if (dev->field_cap != V4L2_FIELD_ALTERNATE ||
+-- 
+2.14.3
+
