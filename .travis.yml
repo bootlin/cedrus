@@ -1,0 +1,65 @@
+language: c
+
+addons:
+  apt:
+    packages:
+      - build-essential
+      - quilt
+      - wget
+
+env:
+  global:
+    - ARCH=arm
+    - BRDIR=/tmp/buildroot
+    - CROSS_COMPILE=arm-buildroot-linux-gnueabihf-
+    - KDIR=/tmp/kernel
+    - KERNEL_DEFCONFIG=multi_v7_defconfig
+    - KERNEL_VERSION=4.9
+    - TOOLCHAIN_DIR=/tmp/toolchain
+    - PATH=${TOOLCHAIN_DIR}/bin:$PATH
+
+install:
+  - wget -O toolchain.tar.xz https://free-electrons.com/~maxime/pub/cedrus-toolchain.tar.xz
+  - mkdir ${TOOLCHAIN_DIR}
+  - tar -C ${TOOLCHAIN_DIR} --strip=1 -xf toolchain.tar.xz
+  - pushd ${TOOLCHAIN_DIR}
+  - ./relocate-sdk.sh
+  - popd
+  - if [[ "${CEDRUS_BUILD}" == "driver" ]]; then
+      wget -O kernel.tar.xz https://www.kernel.org/pub/linux/kernel/v4.x/linux-${KERNEL_VERSION}.tar.xz;
+      mkdir ${KDIR};
+      tar -C ${KDIR} --strip=1 -xf kernel.tar.xz;
+    fi
+  - if [[ "${CEDRUS_BUILD}" == "libva" ]]; then
+      wget -O buildroot.tar.gz https://buildroot.org/downloads/buildroot-2017.11.tar.gz;
+      mkdir ${BRDIR};
+      tar -C ${BRDIR} --strip=1 -xf buildroot.tar.gz;
+    fi
+
+before_script:
+  - if [[ "${CEDRUS_BUILD}" == "driver" ]]; then
+      PATCH_DIR=$(pwd)/patches/${KERNEL_VERSION};
+      pushd ${KDIR};
+      quilt import ${PATCH_DIR}/*.patch;
+      quilt push -a;
+      make -j $(nproc) ${KERNEL_DEFCONFIG} modules_prepare;
+      popd;
+    fi
+  - if [[ "${CEDRUS_BUILD}" == "libva" ]]; then
+      make -C ${BRDIR} BR2_EXTERNAL=$(pwd)/buildroot libva_defconfig;
+    fi
+
+script:
+  - if [[ "${CEDRUS_BUILD}" == "driver" ]]; then
+      make -C driver -j $(nproc);
+    fi
+  - if [[ "${CEDRUS_BUILD}" == "libva" ]]; then
+      make -C ${BRDIR} libva-cedrus-driver;
+    fi
+
+matrix:
+  include:
+    - env:
+      - CEDRUS_BUILD: driver
+    - env:
+      - CEDRUS_BUILD: libva
