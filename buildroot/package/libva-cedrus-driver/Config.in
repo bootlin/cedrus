@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBVA_CEDRUS_DRIVER
+	bool "libva-cedrus-driver"
+	select BR2_PACKAGE_LIBVA
+	select BR2_PACKAGE_XLIB_LIBX11
+	select BR2_PACKAGE_XORG7
