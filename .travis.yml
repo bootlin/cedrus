@@ -42,10 +42,9 @@ before_script:
       quilt import ${PATCH_DIR}/*.patch;
       quilt push -a;
       make -j $(nproc) ${KERNEL_DEFCONFIG};
-      if [[ "${CEDRUS_BUILD}" == "driver" ]]; then
-        make -j $(nproc) modules_prepare;
-      fi;
-      popd;
+    fi
+  - if [[ "${CEDRUS_BUILD}" == "driver" ]]; then
+      make -C ${KDIR} -j $(nproc) modules_prepare;
     fi
   - if [[ "${CEDRUS_BUILD}" == "libva" ]]; then
       make -C ${BRDIR} BR2_EXTERNAL=$(pwd)/buildroot libva_defconfig;
