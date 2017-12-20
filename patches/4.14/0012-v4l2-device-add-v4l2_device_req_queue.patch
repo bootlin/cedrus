@@ -1,0 +1,73 @@
+From 54cdfcc755db3950ecf3f1717088c53a9f491eae Mon Sep 17 00:00:00 2001
+From: Hans Verkuil <hans.verkuil@cisco.com>
+Date: Tue, 21 Apr 2015 11:31:38 +0200
+Subject: [PATCH 12/22] v4l2-device: add v4l2_device_req_queue
+
+The v4l2_device_req_queue() function is a helper that can be used
+as the req_queue callback in simple cases: it will walk over all
+registered video_devices and call vb2_qbuf_request() for each video
+device.
+
+Signed-off-by: Hans Verkuil <hans.verkuil@cisco.com>
+---
+ drivers/media/v4l2-core/v4l2-device.c | 25 +++++++++++++++++++++++++
+ include/media/v4l2-device.h           |  3 +++
+ 2 files changed, 28 insertions(+)
+
+diff --git a/drivers/media/v4l2-core/v4l2-device.c b/drivers/media/v4l2-core/v4l2-device.c
+index 7a6ac03d58f9..5f53c9a7d092 100644
+--- a/drivers/media/v4l2-core/v4l2-device.c
++++ b/drivers/media/v4l2-core/v4l2-device.c
+@@ -29,6 +29,7 @@
+ #include <linux/videodev2.h>
+ #include <media/v4l2-device.h>
+ #include <media/v4l2-ctrls.h>
++#include <media/videobuf2-v4l2.h>
+ 
+ int v4l2_device_register(struct device *dev, struct v4l2_device *v4l2_dev)
+ {
+@@ -321,3 +322,27 @@ void v4l2_device_unregister_subdev(struct v4l2_subdev *sd)
+ 		module_put(sd->owner);
+ }
+ EXPORT_SYMBOL_GPL(v4l2_device_unregister_subdev);
++
++int v4l2_device_req_queue(struct v4l2_device *v4l2_dev, u16 request)
++{
++	struct video_device *vdev;
++	struct video_device *tmp;
++	int err;
++
++	if (request == 0)
++		return -EINVAL;
++
++	list_for_each_entry_safe(vdev, tmp, &v4l2_dev->vdevs, list) {
++		if (vdev->queue == NULL || !vdev->queue->v4l2_allow_requests)
++			continue;
++		if (vdev->lock && mutex_lock_interruptible(vdev->lock))
++			return -ERESTARTSYS;
++		err = vb2_qbuf_request(vdev->queue, request, NULL);
++		if (vdev->lock)
++			mutex_unlock(vdev->lock);
++		if (err)
++			return err;
++	}
++	return 0;
++}
++EXPORT_SYMBOL_GPL(v4l2_device_req_queue);
+diff --git a/include/media/v4l2-device.h b/include/media/v4l2-device.h
+index d28843270e6a..10810d5a7025 100644
+--- a/include/media/v4l2-device.h
++++ b/include/media/v4l2-device.h
+@@ -220,6 +220,9 @@ static inline void v4l2_subdev_notify(struct v4l2_subdev *sd,
+ 		sd->v4l2_dev->notify(sd, notification, arg);
+ }
+ 
++/* For each registered video_device struct call vb2_qbuf_request(). */
++int v4l2_device_req_queue(struct v4l2_device *v4l2_dev, u16 request);
++
+ /* Iterate over all subdevs. */
+ #define v4l2_device_for_each_subdev(sd, v4l2_dev)			\
+ 	list_for_each_entry(sd, &(v4l2_dev)->subdevs, list)
+-- 
+2.14.3
+

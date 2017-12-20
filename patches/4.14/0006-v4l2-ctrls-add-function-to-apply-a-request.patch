@@ -1,0 +1,231 @@
+From 5d64e1a3883f81f05ba3a6ab3d55df79ad09714c Mon Sep 17 00:00:00 2001
+From: Hans Verkuil <hans.verkuil@cisco.com>
+Date: Mon, 13 Apr 2015 15:06:19 +0200
+Subject: [PATCH 06/22] v4l2-ctrls: add function to apply a request.
+
+Drivers need to be able to select a specific request. Add a new function that can
+be used to apply a given request.
+
+Signed-off-by: Hans Verkuil <hans.verkuil@cisco.com>
+---
+ drivers/media/v4l2-core/v4l2-ctrls.c | 112 +++++++++++++++++++++++++++++++++--
+ include/media/v4l2-ctrls.h           |   3 +
+ include/uapi/linux/videodev2.h       |   1 +
+ 3 files changed, 110 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/media/v4l2-core/v4l2-ctrls.c b/drivers/media/v4l2-core/v4l2-ctrls.c
+index e826c5bc0af8..b55f402ba61c 100644
+--- a/drivers/media/v4l2-core/v4l2-ctrls.c
++++ b/drivers/media/v4l2-core/v4l2-ctrls.c
+@@ -1731,8 +1731,10 @@ static void new_to_cur(struct v4l2_fh *fh, struct v4l2_ctrl *ctrl, u32 ch_flags)
+ /* Helper function: copy the new control value to the request */
+ static void new_to_request(struct v4l2_ctrl *ctrl)
+ {
+-	if (ctrl)
++	if (ctrl) {
+ 		ptr_to_ptr(ctrl, ctrl->p_new, ctrl->request->ptr);
++		ctrl->request->applied = 0;
++	}
+ }
+ 
+ /* Copy the current value to the new value */
+@@ -1743,6 +1745,17 @@ static void cur_to_new(struct v4l2_ctrl *ctrl)
+ 	ptr_to_ptr(ctrl, ctrl->p_cur, ctrl->p_new);
+ }
+ 
++static void request_to_new(struct v4l2_ctrl *ctrl)
++{
++	if (ctrl == NULL)
++		return;
++	if (ctrl->request)
++		ptr_to_ptr(ctrl, ctrl->request->ptr, ctrl->p_new);
++	else
++		ptr_to_ptr(ctrl, ctrl->p_cur, ctrl->p_new);
++	ctrl->is_new = true;
++}
++
+ /* Return non-zero if one or more of the controls in the cluster has a new
+    value that differs from the current value. */
+ static int cluster_changed(struct v4l2_ctrl *master)
+@@ -2627,6 +2640,7 @@ int v4l2_query_ext_ctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_query_ext_ctr
+ 	u32 id = qc->id & V4L2_CTRL_ID_MASK;
+ 	u32 req = qc->request;
+ 	struct v4l2_ctrl_ref *ref;
++	struct v4l2_ctrl_req *ctrl_req = NULL;
+ 	struct v4l2_ctrl *ctrl;
+ 
+ 	if (hdl == NULL || req > USHRT_MAX)
+@@ -2690,8 +2704,11 @@ int v4l2_query_ext_ctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_query_ext_ctr
+ 
+ 	if (!ref)
+ 		return -EINVAL;
+-	if (req && get_request(ref->ctrl, req) == NULL)
+-		return -EINVAL;
++	if (req) {
++		ctrl_req = get_request(ref->ctrl, req);
++		if (ctrl_req == NULL)
++			return -EINVAL;
++	}
+ 
+ 	ctrl = ref->ctrl;
+ 	memset(qc, 0, sizeof(*qc));
+@@ -2701,6 +2718,10 @@ int v4l2_query_ext_ctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_query_ext_ctr
+ 		qc->id = ctrl->id;
+ 	strlcpy(qc->name, ctrl->name, sizeof(qc->name));
+ 	qc->flags = ctrl->flags;
++	if (req) {
++		if (ctrl_req->applied)
++			qc->flags |= V4L2_CTRL_FLAG_REQ_APPLIED;
++	}
+ 	qc->max_reqs = ctrl->max_reqs;
+ 	qc->type = ctrl->type;
+ 	if (ctrl->is_ptr)
+@@ -2849,7 +2870,7 @@ static int prepare_ext_ctrls(struct v4l2_ctrl_handler *hdl,
+ 			     bool get)
+ {
+ 	u32 which = V4L2_CTRL_ID2WHICH(cs->which);
+-	unsigned request = cs->request & 0xffff;
++	unsigned request = cs->request & USHRT_MAX;
+ 	struct v4l2_ctrl_helper *h;
+ 	bool have_clusters = false;
+ 	u32 i;
+@@ -3231,7 +3252,7 @@ static void update_from_auto_cluster(struct v4l2_ctrl *master)
+ 		if (master->cluster[i] == NULL)
+ 			continue;
+ 		cur_to_new(master->cluster[i]);
+-		master->cluster[i]->request = 0;
++		master->cluster[i]->request = NULL;
+ 	}
+ 	if (!call_op(master, g_volatile_ctrl))
+ 		for (i = 1; i < master->ncontrols; i++)
+@@ -3375,7 +3396,6 @@ static int set_ctrl(struct v4l2_fh *fh, struct v4l2_ctrl *ctrl, u32 ch_flags)
+ 		if (master->cluster[i] == NULL)
+ 			continue;
+ 		master->cluster[i]->is_new = 0;
+-		master->cluster[i]->request = NULL;
+ 	}
+ 
+ 	ret = validate_new(ctrl, ctrl->p_new);
+@@ -3461,6 +3481,86 @@ int __v4l2_ctrl_s_ctrl_string(struct v4l2_ctrl *ctrl, const char *s)
+ }
+ EXPORT_SYMBOL(__v4l2_ctrl_s_ctrl_string);
+ 
++int v4l2_ctrl_apply_request(struct v4l2_ctrl_handler *hdl, unsigned request)
++{
++	struct v4l2_ctrl_ref *ref;
++	bool found_request = false;
++	int ret = 0;
++	unsigned i;
++
++	if (hdl == NULL)
++		return -EINVAL;
++	if (request == 0)
++		return 0;
++
++	mutex_lock(hdl->lock);
++
++	list_for_each_entry(ref, &hdl->ctrl_refs, node) {
++		struct v4l2_ctrl *master;
++		bool apply_request = false;
++
++		if (ref->ctrl->max_reqs == 0)
++			continue;
++		master = ref->ctrl->cluster[0];
++		if (ref->ctrl != master)
++			continue;
++		if (master->handler != hdl)
++			v4l2_ctrl_lock(master);
++		for (i = 0; !ret && i < master->ncontrols; i++) {
++			struct v4l2_ctrl *ctrl = master->cluster[i];
++
++			if (ctrl == NULL)
++				continue;
++			ctrl->is_new = 0;
++			ctrl->request = get_request(ctrl, request);
++			if (ctrl->request == NULL)
++				continue;
++			found_request = true;
++			if (!ctrl->request->applied) {
++				request_to_new(master->cluster[i]);
++				apply_request = true;
++				ctrl->request->applied = 1;
++			}
++		}
++		if (ret) {
++			if (master->handler != hdl)
++				v4l2_ctrl_unlock(master);
++			break;
++		}
++
++		/*
++		 * Skip if it is a request that has already been applied.
++		 */
++		if (!apply_request)
++			goto unlock;
++
++		/* For volatile autoclusters that are currently in auto mode
++		   we need to discover if it will be set to manual mode.
++		   If so, then we have to copy the current volatile values
++		   first since those will become the new manual values (which
++		   may be overwritten by explicit new values from this set
++		   of controls). */
++		if (master->is_auto && master->has_volatiles &&
++						!is_cur_manual(master)) {
++			s32 new_auto_val = *master->p_new.p_s32;
++
++			/* If the new value == the manual value, then copy
++			   the current volatile values. */
++			if (new_auto_val == master->manual_mode_value)
++				update_from_auto_cluster(master);
++		}
++
++		try_or_set_cluster(NULL, master, 0, true, 0);
++
++unlock:
++		if (master->handler != hdl)
++			v4l2_ctrl_unlock(master);
++	}
++	mutex_unlock(hdl->lock);
++	return ret ? ret : (found_request ? 0 : -EINVAL);
++}
++EXPORT_SYMBOL(v4l2_ctrl_apply_request);
++
+ void v4l2_ctrl_notify(struct v4l2_ctrl *ctrl, v4l2_ctrl_notify_fnc notify, void *priv)
+ {
+ 	if (ctrl == NULL)
+diff --git a/include/media/v4l2-ctrls.h b/include/media/v4l2-ctrls.h
+index 818a3abecf6d..6ad0df048f53 100644
+--- a/include/media/v4l2-ctrls.h
++++ b/include/media/v4l2-ctrls.h
+@@ -108,6 +108,7 @@ typedef void (*v4l2_ctrl_notify_fnc)(struct v4l2_ctrl *ctrl, void *priv);
+ struct v4l2_ctrl_req {
+ 	struct list_head node;
+ 	u32 request;
++	unsigned applied:1;
+ 	union v4l2_ctrl_ptr ptr;
+ };
+ 
+@@ -1000,6 +1001,8 @@ static inline void v4l2_ctrl_s_max_reqs(struct v4l2_ctrl *ctrl, u16 max_reqs)
+ 	ctrl->max_reqs = max_reqs;
+ }
+ 
++int v4l2_ctrl_apply_request(struct v4l2_ctrl_handler *hdl, unsigned request);
++
+ /* Internal helper functions that deal with control events. */
+ extern const struct v4l2_subscribed_event_ops v4l2_ctrl_sub_ev_ops;
+ 
+diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
+index df9098c02c56..5456d35d0e33 100644
+--- a/include/uapi/linux/videodev2.h
++++ b/include/uapi/linux/videodev2.h
+@@ -1674,6 +1674,7 @@ struct v4l2_querymenu {
+ #define V4L2_CTRL_FLAG_HAS_PAYLOAD	0x0100
+ #define V4L2_CTRL_FLAG_EXECUTE_ON_WRITE	0x0200
+ #define V4L2_CTRL_FLAG_MODIFY_LAYOUT	0x0400
++#define V4L2_CTRL_FLAG_REQ_APPLIED	0x0800
+ 
+ /*  Query flags, to be ORed with the control ID */
+ #define V4L2_CTRL_FLAG_NEXT_CTRL	0x80000000
+-- 
+2.14.3
+

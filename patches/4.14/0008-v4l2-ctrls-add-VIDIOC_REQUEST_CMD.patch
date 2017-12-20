@@ -1,0 +1,551 @@
+From d35193ba514df18591a6e2bcf8494037f13adb0c Mon Sep 17 00:00:00 2001
+From: Hans Verkuil <hans.verkuil@cisco.com>
+Date: Thu, 9 Apr 2015 14:28:32 +0200
+Subject: [PATCH 08/22] v4l2-ctrls: add VIDIOC_REQUEST_CMD
+
+Signed-off-by: Hans Verkuil <hans.verkuil@cisco.com>
+---
+ drivers/media/v4l2-core/v4l2-ctrls.c  | 54 ++++++++++++++---------
+ drivers/media/v4l2-core/v4l2-dev.c    |  1 +
+ drivers/media/v4l2-core/v4l2-ioctl.c  | 81 ++++++++++++++++++++++++++++++-----
+ drivers/media/v4l2-core/v4l2-subdev.c | 63 ++++++++++++++++++++++++---
+ include/media/v4l2-ctrls.h            | 10 +++--
+ include/media/v4l2-fh.h               |  1 +
+ include/uapi/linux/videodev2.h        | 17 ++++++++
+ 7 files changed, 186 insertions(+), 41 deletions(-)
+
+diff --git a/drivers/media/v4l2-core/v4l2-ctrls.c b/drivers/media/v4l2-core/v4l2-ctrls.c
+index fed1dfb2f7eb..91db97f16133 100644
+--- a/drivers/media/v4l2-core/v4l2-ctrls.c
++++ b/drivers/media/v4l2-core/v4l2-ctrls.c
+@@ -2743,9 +2743,13 @@ int v4l2_query_ext_ctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_query_ext_ctr
+ EXPORT_SYMBOL(v4l2_query_ext_ctrl);
+ 
+ /* Implement VIDIOC_QUERYCTRL */
+-int v4l2_queryctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_queryctrl *qc)
++int v4l2_queryctrl(struct v4l2_ctrl_handler *hdl,
++		   unsigned request, struct v4l2_queryctrl *qc)
+ {
+-	struct v4l2_query_ext_ctrl qec = { qc->id };
++	struct v4l2_query_ext_ctrl qec = {
++		.id = qc->id,
++		.request = request,
++	};
+ 	int rc;
+ 
+ 	rc = v4l2_query_ext_ctrl(hdl, &qec);
+@@ -3072,7 +3076,8 @@ int v4l2_g_ext_ctrls(struct v4l2_ctrl_handler *hdl, struct v4l2_ext_controls *cs
+ EXPORT_SYMBOL(v4l2_g_ext_ctrls);
+ 
+ /* Helper function to get a single control */
+-static int get_ctrl(struct v4l2_ctrl *ctrl, struct v4l2_ext_control *c)
++static int get_ctrl(struct v4l2_ctrl *ctrl,
++		    unsigned request, struct v4l2_ext_control *c)
+ {
+ 	struct v4l2_ctrl *master = ctrl->cluster[0];
+ 	int ret = 0;
+@@ -3090,11 +3095,17 @@ static int get_ctrl(struct v4l2_ctrl *ctrl, struct v4l2_ext_control *c)
+ 
+ 	v4l2_ctrl_lock(master);
+ 	/* g_volatile_ctrl will update the current control values */
+-	if (ctrl->flags & V4L2_CTRL_FLAG_VOLATILE) {
++	if (request == 0 && (ctrl->flags & V4L2_CTRL_FLAG_VOLATILE)) {
+ 		for (i = 0; i < master->ncontrols; i++)
+ 			cur_to_new(master->cluster[i]);
+ 		ret = call_op(master, g_volatile_ctrl);
+ 		new_to_user(c, ctrl);
++	} else if (request) {
++		ctrl->request = get_request(ctrl, request);
++		if (ctrl->request)
++			ptr_to_user(c, ctrl, ctrl->request->ptr);
++		else
++			ret = -EINVAL;
+ 	} else {
+ 		cur_to_user(c, ctrl);
+ 	}
+@@ -3102,7 +3113,8 @@ static int get_ctrl(struct v4l2_ctrl *ctrl, struct v4l2_ext_control *c)
+ 	return ret;
+ }
+ 
+-int v4l2_g_ctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_control *control)
++int v4l2_g_ctrl(struct v4l2_ctrl_handler *hdl,
++		unsigned request, struct v4l2_control *control)
+ {
+ 	struct v4l2_ctrl *ctrl = v4l2_ctrl_find(hdl, control->id);
+ 	struct v4l2_ext_control c;
+@@ -3110,7 +3122,7 @@ int v4l2_g_ctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_control *control)
+ 
+ 	if (ctrl == NULL || !ctrl->is_int)
+ 		return -EINVAL;
+-	ret = get_ctrl(ctrl, &c);
++	ret = get_ctrl(ctrl, request, &c);
+ 	control->value = c.value;
+ 	return ret;
+ }
+@@ -3123,7 +3135,7 @@ s32 v4l2_ctrl_g_ctrl(struct v4l2_ctrl *ctrl)
+ 	/* It's a driver bug if this happens. */
+ 	WARN_ON(!ctrl->is_int);
+ 	c.value = 0;
+-	get_ctrl(ctrl, &c);
++	get_ctrl(ctrl, 0, &c);
+ 	return c.value;
+ }
+ EXPORT_SYMBOL(v4l2_ctrl_g_ctrl);
+@@ -3135,7 +3147,7 @@ s64 v4l2_ctrl_g_ctrl_int64(struct v4l2_ctrl *ctrl)
+ 	/* It's a driver bug if this happens. */
+ 	WARN_ON(ctrl->is_ptr || ctrl->type != V4L2_CTRL_TYPE_INTEGER64);
+ 	c.value64 = 0;
+-	get_ctrl(ctrl, &c);
++	get_ctrl(ctrl, 0, &c);
+ 	return c.value64;
+ }
+ EXPORT_SYMBOL(v4l2_ctrl_g_ctrl_int64);
+@@ -3385,7 +3397,8 @@ int v4l2_s_ext_ctrls(struct v4l2_fh *fh, struct v4l2_ctrl_handler *hdl,
+ EXPORT_SYMBOL(v4l2_s_ext_ctrls);
+ 
+ /* Helper function for VIDIOC_S_CTRL compatibility */
+-static int set_ctrl(struct v4l2_fh *fh, struct v4l2_ctrl *ctrl, u32 ch_flags)
++static int set_ctrl(struct v4l2_fh *fh, unsigned request,
++		    struct v4l2_ctrl *ctrl, u32 ch_flags)
+ {
+ 	struct v4l2_ctrl *master = ctrl->cluster[0];
+ 	int ret;
+@@ -3405,23 +3418,24 @@ static int set_ctrl(struct v4l2_fh *fh, struct v4l2_ctrl *ctrl, u32 ch_flags)
+ 	/* For autoclusters with volatiles that are switched from auto to
+ 	   manual mode we have to update the current volatile values since
+ 	   those will become the initial manual values after such a switch. */
+-	if (master->is_auto && master->has_volatiles && ctrl == master &&
++	if (request == 0 &&
++	    master->is_auto && master->has_volatiles && ctrl == master &&
+ 	    !is_cur_manual(master) && ctrl->val == master->manual_mode_value)
+ 		update_from_auto_cluster(master);
+ 
+ 	ctrl->is_new = 1;
+-	return try_or_set_cluster(fh, master, 0, true, ch_flags);
++	return try_or_set_cluster(fh, master, request, true, ch_flags);
+ }
+ 
+ /* Helper function for VIDIOC_S_CTRL compatibility */
+-static int set_ctrl_lock(struct v4l2_fh *fh, struct v4l2_ctrl *ctrl,
+-			 struct v4l2_ext_control *c)
++static int set_ctrl_lock(struct v4l2_fh *fh, unsigned request,
++			 struct v4l2_ctrl *ctrl, struct v4l2_ext_control *c)
+ {
+ 	int ret;
+ 
+ 	v4l2_ctrl_lock(ctrl);
+ 	user_to_new(c, ctrl);
+-	ret = set_ctrl(fh, ctrl, 0);
++	ret = set_ctrl(fh, request, ctrl, 0);
+ 	if (!ret)
+ 		cur_to_user(c, ctrl);
+ 	v4l2_ctrl_unlock(ctrl);
+@@ -3429,7 +3443,7 @@ static int set_ctrl_lock(struct v4l2_fh *fh, struct v4l2_ctrl *ctrl,
+ }
+ 
+ int v4l2_s_ctrl(struct v4l2_fh *fh, struct v4l2_ctrl_handler *hdl,
+-					struct v4l2_control *control)
++		unsigned request, struct v4l2_control *control)
+ {
+ 	struct v4l2_ctrl *ctrl = v4l2_ctrl_find(hdl, control->id);
+ 	struct v4l2_ext_control c = { control->id };
+@@ -3442,7 +3456,7 @@ int v4l2_s_ctrl(struct v4l2_fh *fh, struct v4l2_ctrl_handler *hdl,
+ 		return -EACCES;
+ 
+ 	c.value = control->value;
+-	ret = set_ctrl_lock(fh, ctrl, &c);
++	ret = set_ctrl_lock(fh, request, ctrl, &c);
+ 	control->value = c.value;
+ 	return ret;
+ }
+@@ -3455,7 +3469,7 @@ int __v4l2_ctrl_s_ctrl(struct v4l2_ctrl *ctrl, s32 val)
+ 	/* It's a driver bug if this happens. */
+ 	WARN_ON(!ctrl->is_int);
+ 	ctrl->val = val;
+-	return set_ctrl(NULL, ctrl, 0);
++	return set_ctrl(NULL, 0, ctrl, 0);
+ }
+ EXPORT_SYMBOL(__v4l2_ctrl_s_ctrl);
+ 
+@@ -3466,7 +3480,7 @@ int __v4l2_ctrl_s_ctrl_int64(struct v4l2_ctrl *ctrl, s64 val)
+ 	/* It's a driver bug if this happens. */
+ 	WARN_ON(ctrl->is_ptr || ctrl->type != V4L2_CTRL_TYPE_INTEGER64);
+ 	*ctrl->p_new.p_s64 = val;
+-	return set_ctrl(NULL, ctrl, 0);
++	return set_ctrl(NULL, 0, ctrl, 0);
+ }
+ EXPORT_SYMBOL(__v4l2_ctrl_s_ctrl_int64);
+ 
+@@ -3477,7 +3491,7 @@ int __v4l2_ctrl_s_ctrl_string(struct v4l2_ctrl *ctrl, const char *s)
+ 	/* It's a driver bug if this happens. */
+ 	WARN_ON(ctrl->type != V4L2_CTRL_TYPE_STRING);
+ 	strlcpy(ctrl->p_new.p_char, s, ctrl->maximum + 1);
+-	return set_ctrl(NULL, ctrl, 0);
++	return set_ctrl(NULL, 0, ctrl, 0);
+ }
+ EXPORT_SYMBOL(__v4l2_ctrl_s_ctrl_string);
+ 
+@@ -3668,7 +3682,7 @@ int __v4l2_ctrl_modify_range(struct v4l2_ctrl *ctrl,
+ 	else
+ 		value_changed = *ctrl->p_new.p_s32 != *ctrl->p_cur.p_s32;
+ 	if (value_changed)
+-		ret = set_ctrl(NULL, ctrl, V4L2_EVENT_CTRL_CH_RANGE);
++		ret = set_ctrl(NULL, 0, ctrl, V4L2_EVENT_CTRL_CH_RANGE);
+ 	else if (range_changed)
+ 		send_event(NULL, ctrl, V4L2_EVENT_CTRL_CH_RANGE);
+ 	return ret;
+diff --git a/drivers/media/v4l2-core/v4l2-dev.c b/drivers/media/v4l2-core/v4l2-dev.c
+index c647ba648805..623ed06d874e 100644
+--- a/drivers/media/v4l2-core/v4l2-dev.c
++++ b/drivers/media/v4l2-core/v4l2-dev.c
+@@ -562,6 +562,7 @@ static void determine_valid_ioctls(struct video_device *vdev)
+ 	SET_VALID_IOCTL(ops, VIDIOC_G_FREQUENCY, vidioc_g_frequency);
+ 	SET_VALID_IOCTL(ops, VIDIOC_S_FREQUENCY, vidioc_s_frequency);
+ 	SET_VALID_IOCTL(ops, VIDIOC_LOG_STATUS, vidioc_log_status);
++	set_bit(_IOC_NR(VIDIOC_REQUEST_CMD), valid_ioctls);
+ #ifdef CONFIG_VIDEO_ADV_DEBUG
+ 	set_bit(_IOC_NR(VIDIOC_DBG_G_CHIP_INFO), valid_ioctls);
+ 	set_bit(_IOC_NR(VIDIOC_DBG_G_REGISTER), valid_ioctls);
+diff --git a/drivers/media/v4l2-core/v4l2-ioctl.c b/drivers/media/v4l2-core/v4l2-ioctl.c
+index 3cfbcd490794..2f82bd75879e 100644
+--- a/drivers/media/v4l2-core/v4l2-ioctl.c
++++ b/drivers/media/v4l2-core/v4l2-ioctl.c
+@@ -638,6 +638,14 @@ static void v4l_print_decoder_cmd(const void *arg, bool write_only)
+ 		pr_info("pts=%llu\n", p->stop.pts);
+ }
+ 
++static void v4l_print_request_cmd(const void *arg, bool write_only)
++{
++	const struct v4l2_request_cmd *p = arg;
++
++	pr_cont("cmd=%u, request=%u, flags=0x%x\n",
++			p->cmd, p->request, p->flags);
++}
++
+ static void v4l_print_dbg_chip_info(const void *arg, bool write_only)
+ {
+ 	const struct v4l2_dbg_chip_info *p = arg;
+@@ -1988,9 +1996,9 @@ static int v4l_queryctrl(const struct v4l2_ioctl_ops *ops,
+ 		test_bit(V4L2_FL_USES_V4L2_FH, &vfd->flags) ? fh : NULL;
+ 
+ 	if (vfh && vfh->ctrl_handler)
+-		return v4l2_queryctrl(vfh->ctrl_handler, p);
++		return v4l2_queryctrl(vfh->ctrl_handler, vfh->request, p);
+ 	if (vfd->ctrl_handler)
+-		return v4l2_queryctrl(vfd->ctrl_handler, p);
++		return v4l2_queryctrl(vfd->ctrl_handler, 0, p);
+ 	if (ops->vidioc_queryctrl)
+ 		return ops->vidioc_queryctrl(file, fh, p);
+ 	return -ENOTTY;
+@@ -2004,8 +2012,11 @@ static int v4l_query_ext_ctrl(const struct v4l2_ioctl_ops *ops,
+ 	struct v4l2_fh *vfh =
+ 		test_bit(V4L2_FL_USES_V4L2_FH, &vfd->flags) ? fh : NULL;
+ 
+-	if (vfh && vfh->ctrl_handler)
++	if (vfh && vfh->ctrl_handler) {
++		if (vfh->request && p->request == 0)
++			p->request = vfh->request;
+ 		return v4l2_query_ext_ctrl(vfh->ctrl_handler, p);
++	}
+ 	if (vfd->ctrl_handler)
+ 		return v4l2_query_ext_ctrl(vfd->ctrl_handler, p);
+ 	if (p->request)
+@@ -2043,9 +2054,9 @@ static int v4l_g_ctrl(const struct v4l2_ioctl_ops *ops,
+ 	struct v4l2_ext_control ctrl;
+ 
+ 	if (vfh && vfh->ctrl_handler)
+-		return v4l2_g_ctrl(vfh->ctrl_handler, p);
++		return v4l2_g_ctrl(vfh->ctrl_handler, vfh->request, p);
+ 	if (vfd->ctrl_handler)
+-		return v4l2_g_ctrl(vfd->ctrl_handler, p);
++		return v4l2_g_ctrl(vfd->ctrl_handler, 0, p);
+ 	if (ops->vidioc_g_ctrl)
+ 		return ops->vidioc_g_ctrl(file, fh, p);
+ 	if (ops->vidioc_g_ext_ctrls == NULL)
+@@ -2077,9 +2088,9 @@ static int v4l_s_ctrl(const struct v4l2_ioctl_ops *ops,
+ 	struct v4l2_ext_control ctrl;
+ 
+ 	if (vfh && vfh->ctrl_handler)
+-		return v4l2_s_ctrl(vfh, vfh->ctrl_handler, p);
++		return v4l2_s_ctrl(vfh, vfh->ctrl_handler, vfh->request, p);
+ 	if (vfd->ctrl_handler)
+-		return v4l2_s_ctrl(NULL, vfd->ctrl_handler, p);
++		return v4l2_s_ctrl(NULL, vfd->ctrl_handler, 0, p);
+ 	if (ops->vidioc_s_ctrl)
+ 		return ops->vidioc_s_ctrl(file, fh, p);
+ 	if (ops->vidioc_s_ext_ctrls == NULL)
+@@ -2104,8 +2115,11 @@ static int v4l_g_ext_ctrls(const struct v4l2_ioctl_ops *ops,
+ 		test_bit(V4L2_FL_USES_V4L2_FH, &vfd->flags) ? fh : NULL;
+ 
+ 	p->error_idx = p->count;
+-	if (vfh && vfh->ctrl_handler)
++	if (vfh && vfh->ctrl_handler) {
++		if (vfh->request && p->request == 0)
++			p->request = vfh->request;
+ 		return v4l2_g_ext_ctrls(vfh->ctrl_handler, p);
++	}
+ 	if (vfd->ctrl_handler)
+ 		return v4l2_g_ext_ctrls(vfd->ctrl_handler, p);
+ 	if (ops->vidioc_g_ext_ctrls == NULL)
+@@ -2125,8 +2139,11 @@ static int v4l_s_ext_ctrls(const struct v4l2_ioctl_ops *ops,
+ 		test_bit(V4L2_FL_USES_V4L2_FH, &vfd->flags) ? fh : NULL;
+ 
+ 	p->error_idx = p->count;
+-	if (vfh && vfh->ctrl_handler)
++	if (vfh && vfh->ctrl_handler) {
++		if (vfh->request && p->request == 0)
++			p->request = vfh->request;
+ 		return v4l2_s_ext_ctrls(vfh, vfh->ctrl_handler, p);
++	}
+ 	if (vfd->ctrl_handler)
+ 		return v4l2_s_ext_ctrls(NULL, vfd->ctrl_handler, p);
+ 	if (ops->vidioc_s_ext_ctrls == NULL)
+@@ -2146,8 +2163,11 @@ static int v4l_try_ext_ctrls(const struct v4l2_ioctl_ops *ops,
+ 		test_bit(V4L2_FL_USES_V4L2_FH, &vfd->flags) ? fh : NULL;
+ 
+ 	p->error_idx = p->count;
+-	if (vfh && vfh->ctrl_handler)
++	if (vfh && vfh->ctrl_handler) {
++		if (vfh->request && p->request == 0)
++			p->request = vfh->request;
+ 		return v4l2_try_ext_ctrls(vfh->ctrl_handler, p);
++	}
+ 	if (vfd->ctrl_handler)
+ 		return v4l2_try_ext_ctrls(vfd->ctrl_handler, p);
+ 	if (ops->vidioc_try_ext_ctrls == NULL)
+@@ -2306,6 +2326,46 @@ static int v4l_cropcap(const struct v4l2_ioctl_ops *ops,
+ 	return 0;
+ }
+ 
++static int v4l_request_cmd(const struct v4l2_ioctl_ops *ops,
++				struct file *file, void *fh, void *arg)
++{
++	struct v4l2_request_cmd *p = arg;
++	struct video_device *vfd;
++	struct v4l2_fh *vfh;
++	int ret;
++
++	vfd = video_devdata(file);
++	if (!test_bit(V4L2_FL_USES_V4L2_FH, &vfd->flags))
++		return -ENOTTY;
++	vfh = file->private_data;
++	if (vfh->ctrl_handler == NULL)
++		return -ENOTTY;
++	ret = v4l2_prio_check(vfd->prio, vfh->prio);
++	if (ret)
++		return ret;
++	if (p->request > USHRT_MAX)
++		return -EINVAL;
++	switch (p->cmd) {
++	case V4L2_REQ_CMD_BEGIN:
++		if (vfh->request)
++			return -EBUSY;
++		if (p->request == 0)
++			return -EINVAL;
++		vfh->request = p->request;
++		break;
++	case V4L2_REQ_CMD_END:
++		vfh->request = 0;
++		break;
++	case V4L2_REQ_CMD_DELETE:
++		return v4l2_ctrl_delete_request(vfh->ctrl_handler, p->request);
++	case V4L2_REQ_CMD_APPLY:
++		return v4l2_ctrl_apply_request(vfh->ctrl_handler, p->request);
++	default:
++		return -EINVAL;
++	}
++	return 0;
++}
++
+ static int v4l_log_status(const struct v4l2_ioctl_ops *ops,
+ 				struct file *file, void *fh, void *arg)
+ {
+@@ -2648,6 +2708,7 @@ static struct v4l2_ioctl_info v4l2_ioctls[] = {
+ 	IOCTL_INFO_FNC(VIDIOC_ENUM_FREQ_BANDS, v4l_enum_freq_bands, v4l_print_freq_band, 0),
+ 	IOCTL_INFO_FNC(VIDIOC_DBG_G_CHIP_INFO, v4l_dbg_g_chip_info, v4l_print_dbg_chip_info, INFO_FL_CLEAR(v4l2_dbg_chip_info, match)),
+ 	IOCTL_INFO_FNC(VIDIOC_QUERY_EXT_CTRL, v4l_query_ext_ctrl, v4l_print_query_ext_ctrl, INFO_FL_CTRL | INFO_FL_CLEAR(v4l2_query_ext_ctrl, id)),
++	IOCTL_INFO_FNC(VIDIOC_REQUEST_CMD, v4l_request_cmd, v4l_print_request_cmd, 0),
+ };
+ #define V4L2_IOCTLS ARRAY_SIZE(v4l2_ioctls)
+ 
+diff --git a/drivers/media/v4l2-core/v4l2-subdev.c b/drivers/media/v4l2-core/v4l2-subdev.c
+index 43fefa73e0a3..0b5997ebadce 100644
+--- a/drivers/media/v4l2-core/v4l2-subdev.c
++++ b/drivers/media/v4l2-core/v4l2-subdev.c
+@@ -187,28 +187,48 @@ static long subdev_do_ioctl(struct file *file, unsigned int cmd, void *arg)
+ 
+ 	switch (cmd) {
+ 	case VIDIOC_QUERYCTRL:
+-		return v4l2_queryctrl(vfh->ctrl_handler, arg);
++		return v4l2_queryctrl(vfh->ctrl_handler, vfh->request, arg);
+ 
+-	case VIDIOC_QUERY_EXT_CTRL:
++	case VIDIOC_QUERY_EXT_CTRL: {
++		struct v4l2_query_ext_ctrl *p = arg;
++
++		if (vfh->request && p->request == 0)
++			p->request = vfh->request;
+ 		return v4l2_query_ext_ctrl(vfh->ctrl_handler, arg);
++	}
+ 
+ 	case VIDIOC_QUERYMENU:
+ 		return v4l2_querymenu(vfh->ctrl_handler, arg);
+ 
+ 	case VIDIOC_G_CTRL:
+-		return v4l2_g_ctrl(vfh->ctrl_handler, arg);
++		return v4l2_g_ctrl(vfh->ctrl_handler, vfh->request, arg);
+ 
+ 	case VIDIOC_S_CTRL:
+-		return v4l2_s_ctrl(vfh, vfh->ctrl_handler, arg);
++		return v4l2_s_ctrl(vfh, vfh->ctrl_handler, vfh->request, arg);
+ 
+-	case VIDIOC_G_EXT_CTRLS:
++	case VIDIOC_G_EXT_CTRLS: {
++		struct v4l2_ext_controls *p = arg;
++
++		if (vfh->request && p->request == 0)
++			p->request = vfh->request;
+ 		return v4l2_g_ext_ctrls(vfh->ctrl_handler, arg);
++	}
+ 
+-	case VIDIOC_S_EXT_CTRLS:
++	case VIDIOC_S_EXT_CTRLS: {
++		struct v4l2_ext_controls *p = arg;
++
++		if (vfh->request && p->request == 0)
++			p->request = vfh->request;
+ 		return v4l2_s_ext_ctrls(vfh, vfh->ctrl_handler, arg);
++	}
+ 
+-	case VIDIOC_TRY_EXT_CTRLS:
++	case VIDIOC_TRY_EXT_CTRLS: {
++		struct v4l2_ext_controls *p = arg;
++
++		if (vfh->request && p->request == 0)
++			p->request = vfh->request;
+ 		return v4l2_try_ext_ctrls(vfh->ctrl_handler, arg);
++	}
+ 
+ 	case VIDIOC_DQEVENT:
+ 		if (!(sd->flags & V4L2_SUBDEV_FL_HAS_EVENTS))
+@@ -222,6 +242,35 @@ static long subdev_do_ioctl(struct file *file, unsigned int cmd, void *arg)
+ 	case VIDIOC_UNSUBSCRIBE_EVENT:
+ 		return v4l2_subdev_call(sd, core, unsubscribe_event, vfh, arg);
+ 
++	case VIDIOC_REQUEST_CMD: {
++		struct v4l2_request_cmd *p = arg;
++
++		if (p->request > USHRT_MAX)
++			return -EINVAL;
++
++		switch (p->cmd) {
++		case V4L2_REQ_CMD_BEGIN:
++			if (vfh->request)
++				return -EBUSY;
++			if (p->request == 0)
++				return -EINVAL;
++			vfh->request = p->request;
++			break;
++		case V4L2_REQ_CMD_END:
++			vfh->request = 0;
++			break;
++		case V4L2_REQ_CMD_DELETE:
++			return v4l2_ctrl_delete_request(vfh->ctrl_handler,
++							p->request);
++		case V4L2_REQ_CMD_APPLY:
++			return v4l2_ctrl_apply_request(vfh->ctrl_handler,
++						       p->request);
++		default:
++			return -EINVAL;
++		}
++		return 0;
++	}
++
+ #ifdef CONFIG_VIDEO_ADV_DEBUG
+ 	case VIDIOC_DBG_G_REGISTER:
+ 	{
+diff --git a/include/media/v4l2-ctrls.h b/include/media/v4l2-ctrls.h
+index da5a18fe2e32..f3a805c8608a 100644
+--- a/include/media/v4l2-ctrls.h
++++ b/include/media/v4l2-ctrls.h
+@@ -1074,7 +1074,8 @@ unsigned int v4l2_ctrl_poll(struct file *file, struct poll_table_struct *wait);
+  *
+  * If hdl == NULL then they will all return -EINVAL.
+  */
+-int v4l2_queryctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_queryctrl *qc);
++int v4l2_queryctrl(struct v4l2_ctrl_handler *hdl,
++		   unsigned request, struct v4l2_queryctrl *qc);
+ 
+ /**
+  * v4l2_query_ext_ctrl - Helper function to implement
+@@ -1108,7 +1109,8 @@ int v4l2_querymenu(struct v4l2_ctrl_handler *hdl, struct v4l2_querymenu *qm);
+  *
+  * If hdl == NULL then they will all return -EINVAL.
+  */
+-int v4l2_g_ctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_control *ctrl);
++int v4l2_g_ctrl(struct v4l2_ctrl_handler *hdl,
++		unsigned request, struct v4l2_control *ctrl);
+ 
+ /**
+  * v4l2_s_ctrl - Helper function to implement
+@@ -1121,8 +1123,8 @@ int v4l2_g_ctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_control *ctrl);
+  *
+  * If hdl == NULL then they will all return -EINVAL.
+  */
+-int v4l2_s_ctrl(struct v4l2_fh *fh, struct v4l2_ctrl_handler *hdl,
+-		struct v4l2_control *ctrl);
++int v4l2_s_ctrl(struct v4l2_ctrl_handler *hdl,
++		unsigned request, struct v4l2_control *ctrl);
+ 
+ /**
+  * v4l2_g_ext_ctrls - Helper function to implement
+diff --git a/include/media/v4l2-fh.h b/include/media/v4l2-fh.h
+index 62633e7d2630..25aef57180bb 100644
+--- a/include/media/v4l2-fh.h
++++ b/include/media/v4l2-fh.h
+@@ -55,6 +55,7 @@ struct v4l2_fh {
+ 	struct list_head	available;
+ 	unsigned int		navailable;
+ 	u32			sequence;
++	u16			request;
+ 
+ #if IS_ENABLED(CONFIG_V4L2_MEM2MEM_DEV)
+ 	struct v4l2_m2m_ctx	*m2m_ctx;
+diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
+index 5456d35d0e33..f39565ae69d3 100644
+--- a/include/uapi/linux/videodev2.h
++++ b/include/uapi/linux/videodev2.h
+@@ -2303,6 +2303,21 @@ struct v4l2_create_buffers {
+ 	__u32			reserved[8];
+ };
+ 
++#define V4L2_REQ_CMD_BEGIN	(0)
++#define V4L2_REQ_CMD_END	(1)
++#define V4L2_REQ_CMD_DELETE	(2)
++#define V4L2_REQ_CMD_APPLY	(3)
++
++struct v4l2_request_cmd {
++	__u32 cmd;
++	__u16 request;
++	__u16 flags;
++	union {
++		struct {
++			__u32 data[8];
++		} raw;
++	};
++};
+ /*
+  *	I O C T L   C O D E S   F O R   V I D E O   D E V I C E S
+  *
+@@ -2404,6 +2419,8 @@ struct v4l2_create_buffers {
+ 
+ #define VIDIOC_QUERY_EXT_CTRL	_IOWR('V', 103, struct v4l2_query_ext_ctrl)
+ 
++#define VIDIOC_REQUEST_CMD      _IOWR('V', 104, struct v4l2_request_cmd)
++
+ /* Reminder: when adding new ioctls please add support for them to
+    drivers/media/v4l2-core/v4l2-compat-ioctl32.c as well! */
+ 
+-- 
+2.14.3
+
