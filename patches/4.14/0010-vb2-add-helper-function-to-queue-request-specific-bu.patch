@@ -1,0 +1,65 @@
+From 5e8e3f3e84163721877b02d1d11d2a71257364a4 Mon Sep 17 00:00:00 2001
+From: Hans Verkuil <hans.verkuil@cisco.com>
+Date: Mon, 13 Apr 2015 15:53:34 +0200
+Subject: [PATCH 10/22] vb2: add helper function to queue request-specific
+ buffer.
+
+The vb2_qbuf_request() function will queue any buffers for the given request
+that are in state PREPARED.
+
+Useful when drivers have to implement the req_queue callback.
+
+Signed-off-by: Hans Verkuil <hans.verkuil@cisco.com>
+---
+ drivers/media/v4l2-core/videobuf2-v4l2.c | 21 +++++++++++++++++++++
+ include/media/videobuf2-v4l2.h           |  2 ++
+ 2 files changed, 23 insertions(+)
+
+diff --git a/drivers/media/v4l2-core/videobuf2-v4l2.c b/drivers/media/v4l2-core/videobuf2-v4l2.c
+index 40eaef9b4336..9798fd449c41 100644
+--- a/drivers/media/v4l2-core/videobuf2-v4l2.c
++++ b/drivers/media/v4l2-core/videobuf2-v4l2.c
+@@ -579,6 +579,27 @@ int vb2_qbuf(struct vb2_queue *q, struct v4l2_buffer *b)
+ }
+ EXPORT_SYMBOL_GPL(vb2_qbuf);
+ 
++int vb2_qbuf_request(struct vb2_queue *q, u16 request, struct vb2_buffer **p_buf)
++{
++	struct v4l2_buffer v4l2_buf;
++	int buffer;
++
++	for (buffer = 0; buffer < q->num_buffers; buffer++) {
++		struct vb2_buffer *vb = q->bufs[buffer];
++		struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
++
++		if (vbuf->request == request &&
++		    vb->state == VB2_BUF_STATE_PREPARED) {
++			if (p_buf)
++				*p_buf = vb;
++			__fill_v4l2_buffer(vb, &v4l2_buf);
++			return vb2_qbuf(q, &v4l2_buf);
++		}
++	}
++	return -ENOENT;
++}
++EXPORT_SYMBOL_GPL(vb2_qbuf_request);
++
+ int vb2_dqbuf(struct vb2_queue *q, struct v4l2_buffer *b, bool nonblocking)
+ {
+ 	int ret;
+diff --git a/include/media/videobuf2-v4l2.h b/include/media/videobuf2-v4l2.h
+index 3029b763ab58..9d4b5422ae06 100644
+--- a/include/media/videobuf2-v4l2.h
++++ b/include/media/videobuf2-v4l2.h
+@@ -125,6 +125,8 @@ int vb2_qbuf(struct vb2_queue *q, struct v4l2_buffer *b);
+  */
+ int vb2_expbuf(struct vb2_queue *q, struct v4l2_exportbuffer *eb);
+ 
++int vb2_qbuf_request(struct vb2_queue *q, u16 request, struct vb2_buffer **p_buf);
++
+ /**
+  * vb2_dqbuf() - Dequeue a buffer to the userspace
+  * @q:		videobuf2 queue
+-- 
+2.14.3
+
