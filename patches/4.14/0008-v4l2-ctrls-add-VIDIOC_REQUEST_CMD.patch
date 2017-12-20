@@ -9,10 +9,10 @@ Signed-off-by: Hans Verkuil <hans.verkuil@cisco.com>
  drivers/media/v4l2-core/v4l2-dev.c    |  1 +
  drivers/media/v4l2-core/v4l2-ioctl.c  | 81 ++++++++++++++++++++++++++++++-----
  drivers/media/v4l2-core/v4l2-subdev.c | 63 ++++++++++++++++++++++++---
- include/media/v4l2-ctrls.h            | 10 +++--
+ include/media/v4l2-ctrls.h            |  8 ++--
  include/media/v4l2-fh.h               |  1 +
  include/uapi/linux/videodev2.h        | 17 ++++++++
- 7 files changed, 186 insertions(+), 41 deletions(-)
+ 7 files changed, 185 insertions(+), 40 deletions(-)
 
 diff --git a/drivers/media/v4l2-core/v4l2-ctrls.c b/drivers/media/v4l2-core/v4l2-ctrls.c
 index fed1dfb2f7eb..91db97f16133 100644
@@ -488,13 +488,11 @@ index da5a18fe2e32..f3a805c8608a 100644
  
  /**
   * v4l2_s_ctrl - Helper function to implement
-@@ -1121,8 +1123,8 @@ int v4l2_g_ctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_control *ctrl);
-  *
+@@ -1122,7 +1124,7 @@ int v4l2_g_ctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_control *ctrl);
   * If hdl == NULL then they will all return -EINVAL.
   */
--int v4l2_s_ctrl(struct v4l2_fh *fh, struct v4l2_ctrl_handler *hdl,
+ int v4l2_s_ctrl(struct v4l2_fh *fh, struct v4l2_ctrl_handler *hdl,
 -		struct v4l2_control *ctrl);
-+int v4l2_s_ctrl(struct v4l2_ctrl_handler *hdl,
 +		unsigned request, struct v4l2_control *ctrl);
  
  /**
