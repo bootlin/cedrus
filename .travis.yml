@@ -24,7 +24,7 @@ install:
   - pushd ${TOOLCHAIN_DIR}
   - ./relocate-sdk.sh
   - popd
-  - if [[ "${CEDRUS_BUILD}" == "driver" ]]; then
+  - if [[ "${CEDRUS_BUILD}" == "driver" || "${CEDRUS_BUILD}" == "dtbs" ]]; then
       wget -O kernel.tar.xz https://www.kernel.org/pub/linux/kernel/v4.x/linux-${KERNEL_VERSION}.tar.xz;
       mkdir ${KDIR};
       tar -C ${KDIR} --strip=1 -xf kernel.tar.xz;
@@ -36,12 +36,15 @@ install:
     fi
 
 before_script:
-  - if [[ "${CEDRUS_BUILD}" == "driver" ]]; then
+  - if [[ "${CEDRUS_BUILD}" == "driver" || "${CEDRUS_BUILD}" == "dtbs" ]]; then
       PATCH_DIR=$(pwd)/patches/${KERNEL_VERSION};
       pushd ${KDIR};
       quilt import ${PATCH_DIR}/*.patch;
       quilt push -a;
-      make -j $(nproc) ${KERNEL_DEFCONFIG} modules_prepare;
+      make -j $(nproc) ${KERNEL_DEFCONFIG};
+      if [[ "${CEDRUS_BUILD}" == "driver" ]]; then
+        make -j $(nproc) modules_prepare;
+      fi;
       popd;
     fi
   - if [[ "${CEDRUS_BUILD}" == "libva" ]]; then
@@ -51,6 +54,9 @@ before_script:
 script:
   - if [[ "${CEDRUS_BUILD}" == "driver" ]]; then
       make -C driver -j $(nproc);
+    fi
+  - if [[ "${CEDRUS_BUILD}" == "dtbs" ]]; then
+      make -C ${KDIR} -j $(nproc) dtbs;
     fi
   - if [[ "${CEDRUS_BUILD}" == "libva" ]]; then
       make -C ${BRDIR} libva-cedrus-driver;
@@ -63,6 +69,12 @@ matrix:
         KERNEL_VERSION: 4.9
     - env:
       - CEDRUS_BUILD: driver
+        KERNEL_VERSION: 4.14
+    - env:
+      - CEDRUS_BUILD: dtbs
+        KERNEL_VERSION: 4.9
+    - env:
+      - CEDRUS_BUILD: dtbs
         KERNEL_VERSION: 4.14
     - env:
       - CEDRUS_BUILD: libva
