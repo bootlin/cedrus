@@ -57,6 +57,9 @@ script:
   - if [[ "${CEDRUS_BUILD}" == "dtbs" ]]; then
       make -C ${KDIR} -j $(nproc) dtbs;
     fi
+  - if [[ "${CEDRUS_BUILD}" == "kernel" ]]; then
+      make -C ${KDIR} -j $(nproc) zImage modules;
+    fi
   - if [[ "${CEDRUS_BUILD}" == "libva" ]]; then
       make -C ${BRDIR} libva-cedrus-driver;
     fi
@@ -74,6 +77,12 @@ matrix:
         KERNEL_VERSION: 4.9
     - env:
       - CEDRUS_BUILD: dtbs
+        KERNEL_VERSION: 4.14
+    - env:
+      - CEDRUS_BUILD: kernel
+        KERNEL_VERSION: 4.9
+    - env:
+      - CEDRUS_BUILD: kernel
         KERNEL_VERSION: 4.14
     - env:
       - CEDRUS_BUILD: libva
