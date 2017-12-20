@@ -24,7 +24,7 @@ install:
   - pushd ${TOOLCHAIN_DIR}
   - ./relocate-sdk.sh
   - popd
-  - if [[ "${CEDRUS_BUILD}" == "driver" || "${CEDRUS_BUILD}" == "dtbs" ]]; then
+  - if [[ "${CEDRUS_BUILD}" != "libva" ]]; then
       wget -O kernel.tar.xz https://www.kernel.org/pub/linux/kernel/v4.x/linux-${KERNEL_VERSION}.tar.xz;
       mkdir ${KDIR};
       tar -C ${KDIR} --strip=1 -xf kernel.tar.xz;
@@ -36,7 +36,7 @@ install:
     fi
 
 before_script:
-  - if [[ "${CEDRUS_BUILD}" == "driver" || "${CEDRUS_BUILD}" == "dtbs" ]]; then
+  - if [[ "${CEDRUS_BUILD}" != "libva" ]]; then
       PATCH_DIR=$(pwd)/patches/${KERNEL_VERSION};
       pushd ${KDIR};
       quilt import ${PATCH_DIR}/*.patch;
