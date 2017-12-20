@@ -42,6 +42,7 @@ before_script:
       quilt import ${PATCH_DIR}/*.patch;
       quilt push -a;
       make -j $(nproc) ${KERNEL_DEFCONFIG};
+      popd;
     fi
   - if [[ "${CEDRUS_BUILD}" == "driver" ]]; then
       make -C ${KDIR} -j $(nproc) modules_prepare;
