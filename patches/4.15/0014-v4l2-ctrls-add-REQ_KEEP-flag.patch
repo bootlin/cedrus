@@ -1,0 +1,261 @@
+From e068fe29dd5f9c6fca4f60732bfc008b03582726 Mon Sep 17 00:00:00 2001
+From: Hans Verkuil <hans.verkuil@cisco.com>
+Date: Tue, 21 Apr 2015 12:30:04 +0200
+Subject: [PATCH 14/21] v4l2-ctrls: add REQ_KEEP flag
+
+Experimental: I am still not certain whether this is desired or not.
+
+Signed-off-by: Hans Verkuil <hans.verkuil@cisco.com>
+---
+ drivers/media/v4l2-core/v4l2-ctrls.c  | 28 ++++++++++++++++++++--------
+ drivers/media/v4l2-core/v4l2-ioctl.c  |  9 ++++++++-
+ drivers/media/v4l2-core/v4l2-subdev.c | 11 ++++++++++-
+ include/media/v4l2-ctrls.h            |  3 +++
+ include/media/v4l2-fh.h               |  3 +++
+ include/uapi/linux/videodev2.h        |  4 ++++
+ 6 files changed, 48 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/media/v4l2-core/v4l2-ctrls.c b/drivers/media/v4l2-core/v4l2-ctrls.c
+index 2130a82..e6a83db6 100644
+--- a/drivers/media/v4l2-core/v4l2-ctrls.c
++++ b/drivers/media/v4l2-core/v4l2-ctrls.c
+@@ -2727,6 +2727,8 @@ int v4l2_query_ext_ctrl(struct v4l2_ctrl_handler *hdl, struct v4l2_query_ext_ctr
+ 	if (req) {
+ 		if (ctrl_req->applied)
+ 			qc->flags |= V4L2_CTRL_FLAG_REQ_APPLIED;
++		if (ctrl_req->keep)
++			qc->flags |= V4L2_CTRL_FLAG_REQ_KEEP;
+ 	}
+ 	qc->max_reqs = ctrl->max_reqs;
+ 	qc->type = ctrl->type;
+@@ -3160,7 +3162,7 @@ EXPORT_SYMBOL(v4l2_ctrl_g_ctrl_int64);
+    copied to the current value on a set.
+    Must be called with ctrl->handler->lock held. */
+ static int try_or_set_cluster(struct v4l2_fh *fh, struct v4l2_ctrl *master,
+-			      u16 request, bool set, u32 ch_flags)
++			      u16 request, bool keep, bool set, u32 ch_flags)
+ {
+ 	bool update_flag;
+ 	int ret;
+@@ -3184,6 +3186,8 @@ static int try_or_set_cluster(struct v4l2_fh *fh, struct v4l2_ctrl *master,
+ 				if (ret)
+ 					return ret;
+ 			}
++			if (set)
++				req->keep = keep;
+ 		}
+ 		ctrl->request = req;
+ 		if (!ctrl->is_new) {
+@@ -3284,6 +3288,7 @@ static int try_set_ext_ctrls(struct v4l2_fh *fh, struct v4l2_ctrl_handler *hdl,
+ 	struct v4l2_ctrl_helper helper[4];
+ 	struct v4l2_ctrl_helper *helpers = helper;
+ 	unsigned request = 0;
++	bool keep = false;
+ 	unsigned i, j;
+ 	int ret;
+ 
+@@ -3293,10 +3298,12 @@ static int try_set_ext_ctrls(struct v4l2_fh *fh, struct v4l2_ctrl_handler *hdl,
+ 	if (cs->which == V4L2_CTRL_WHICH_DEF_VAL)
+ 		return -EINVAL;
+ 
+-	if (V4L2_CTRL_ID2WHICH(cs->which))
++	if (V4L2_CTRL_ID2WHICH(cs->which)) {
+ 		cs->which = V4L2_CTRL_ID2WHICH(cs->which);
+-	else
++	} else {
+ 		request = cs->request;
++		keep = set && (cs->request & V4L2_CTRL_REQ_FL_KEEP);
++	}
+ 
+ 	if (hdl == NULL || request > USHRT_MAX)
+ 		return -EINVAL;
+@@ -3368,7 +3375,8 @@ static int try_set_ext_ctrls(struct v4l2_fh *fh, struct v4l2_ctrl_handler *hdl,
+ 		} while (!ret && idx);
+ 
+ 		if (!ret)
+-			ret = try_or_set_cluster(fh, master, request, set, 0);
++			ret = try_or_set_cluster(fh, master, request,
++						 keep, set, 0);
+ 
+ 		/* Copy the new values back to userspace. */
+ 		if (!ret) {
+@@ -3428,7 +3436,7 @@ static int set_ctrl(struct v4l2_fh *fh, unsigned request,
+ 		update_from_auto_cluster(master);
+ 
+ 	ctrl->is_new = 1;
+-	return try_or_set_cluster(fh, master, request, true, ch_flags);
++	return try_or_set_cluster(fh, master, request, false, true, ch_flags);
+ }
+ 
+ /* Helper function for VIDIOC_S_CTRL compatibility */
+@@ -3516,6 +3524,7 @@ int v4l2_ctrl_apply_request(struct v4l2_ctrl_handler *hdl, unsigned request)
+ 	list_for_each_entry(ref, &hdl->ctrl_refs, node) {
+ 		struct v4l2_ctrl *master;
+ 		bool apply_request = false;
++		bool keep = false;
+ 
+ 		if (ref->ctrl->max_reqs == 0)
+ 			continue;
+@@ -3534,9 +3543,11 @@ int v4l2_ctrl_apply_request(struct v4l2_ctrl_handler *hdl, unsigned request)
+ 			if (ctrl->request == NULL)
+ 				continue;
+ 			found_request = true;
+-			if (!ctrl->request->applied) {
++			if (ctrl->request->keep || !ctrl->request->applied) {
+ 				request_to_new(master->cluster[i]);
+ 				apply_request = true;
++				if (ctrl->request->keep)
++					keep = true;
+ 				ctrl->request->applied = 1;
+ 			}
+ 		}
+@@ -3547,7 +3558,8 @@ int v4l2_ctrl_apply_request(struct v4l2_ctrl_handler *hdl, unsigned request)
+ 		}
+ 
+ 		/*
+-		 * Skip if it is a request that has already been applied.
++		 * Skip if it is a one-off request that has already been
++		 * applied.
+ 		 */
+ 		if (!apply_request)
+ 			goto unlock;
+@@ -3568,7 +3580,7 @@ int v4l2_ctrl_apply_request(struct v4l2_ctrl_handler *hdl, unsigned request)
+ 				update_from_auto_cluster(master);
+ 		}
+ 
+-		try_or_set_cluster(NULL, master, 0, true, 0);
++		try_or_set_cluster(NULL, master, 0, keep, true, 0);
+ 
+ unlock:
+ 		if (master->handler != hdl)
+diff --git a/drivers/media/v4l2-core/v4l2-ioctl.c b/drivers/media/v4l2-core/v4l2-ioctl.c
+index 2409cf3..17b4d5e 100644
+--- a/drivers/media/v4l2-core/v4l2-ioctl.c
++++ b/drivers/media/v4l2-core/v4l2-ioctl.c
+@@ -2143,8 +2143,11 @@ static int v4l_s_ext_ctrls(const struct v4l2_ioctl_ops *ops,
+ 
+ 	p->error_idx = p->count;
+ 	if (vfh && vfh->ctrl_handler) {
+-		if (vfh->request && p->request == 0)
++		if (vfh->request && p->request == 0) {
+ 			p->request = vfh->request;
++			if (vfh->flags & V4L2_FH_FL_KEEP)
++				p->request |= V4L2_CTRL_REQ_FL_KEEP;
++		}
+ 		return v4l2_s_ext_ctrls(vfh, vfh->ctrl_handler, p);
+ 	}
+ 	if (vfd->ctrl_handler)
+@@ -2355,6 +2358,10 @@ static int v4l_request_cmd(const struct v4l2_ioctl_ops *ops,
+ 		if (p->request == 0)
+ 			return -EINVAL;
+ 		vfh->request = p->request;
++		if (p->flags & V4L2_REQ_CMD_BEGIN_FL_KEEP)
++			vfh->flags |= V4L2_FH_FL_KEEP;
++		else
++			vfh->flags &= ~V4L2_FH_FL_KEEP;
+ 		break;
+ 	case V4L2_REQ_CMD_END:
+ 		vfh->request = 0;
+diff --git a/drivers/media/v4l2-core/v4l2-subdev.c b/drivers/media/v4l2-core/v4l2-subdev.c
+index c1da78c..e88ea6b 100644
+--- a/drivers/media/v4l2-core/v4l2-subdev.c
++++ b/drivers/media/v4l2-core/v4l2-subdev.c
+@@ -211,14 +211,19 @@ static long subdev_do_ioctl(struct file *file, unsigned int cmd, void *arg)
+ 
+ 		if (vfh->request && p->request == 0)
+ 			p->request = vfh->request;
++		else if (p->request > USHRT_MAX)
++			return -EINVAL;
+ 		return v4l2_g_ext_ctrls(vfh->ctrl_handler, arg);
+ 	}
+ 
+ 	case VIDIOC_S_EXT_CTRLS: {
+ 		struct v4l2_ext_controls *p = arg;
+ 
+-		if (vfh->request && p->request == 0)
++		if (vfh->request && p->request == 0) {
+ 			p->request = vfh->request;
++			if (vfh->flags & V4L2_FH_FL_KEEP)
++				p->request |= V4L2_CTRL_REQ_FL_KEEP;
++		}
+ 		return v4l2_s_ext_ctrls(vfh, vfh->ctrl_handler, arg);
+ 	}
+ 
+@@ -255,6 +260,10 @@ static long subdev_do_ioctl(struct file *file, unsigned int cmd, void *arg)
+ 			if (p->request == 0)
+ 				return -EINVAL;
+ 			vfh->request = p->request;
++			if (p->flags & V4L2_REQ_CMD_BEGIN_FL_KEEP)
++				vfh->flags |= V4L2_FH_FL_KEEP;
++			else
++				vfh->flags &= ~V4L2_FH_FL_KEEP;
+ 			break;
+ 		case V4L2_REQ_CMD_END:
+ 			vfh->request = 0;
+diff --git a/include/media/v4l2-ctrls.h b/include/media/v4l2-ctrls.h
+index e90433e..dcb91cf 100644
+--- a/include/media/v4l2-ctrls.h
++++ b/include/media/v4l2-ctrls.h
+@@ -32,6 +32,8 @@ struct v4l2_subscribed_event;
+ struct v4l2_fh;
+ struct poll_table_struct;
+ 
++#define V4L2_CTRL_REQ_FL_KEEP (1UL << 31)
++
+ /**
+  * union v4l2_ctrl_ptr - A pointer to a control value.
+  * @p_s32:	Pointer to a 32-bit signed value.
+@@ -108,6 +110,7 @@ typedef void (*v4l2_ctrl_notify_fnc)(struct v4l2_ctrl *ctrl, void *priv);
+ struct v4l2_ctrl_req {
+ 	struct list_head node;
+ 	u32 request;
++	unsigned keep:1;
+ 	unsigned applied:1;
+ 	union v4l2_ctrl_ptr ptr;
+ };
+diff --git a/include/media/v4l2-fh.h b/include/media/v4l2-fh.h
+index 25aef57..244dcec 100644
+--- a/include/media/v4l2-fh.h
++++ b/include/media/v4l2-fh.h
+@@ -28,6 +28,8 @@
+ struct video_device;
+ struct v4l2_ctrl_handler;
+ 
++#define V4L2_FH_FL_KEEP	(1 << 0)
++
+ /**
+  * struct v4l2_fh - Describes a V4L2 file handler
+  *
+@@ -56,6 +58,7 @@ struct v4l2_fh {
+ 	unsigned int		navailable;
+ 	u32			sequence;
+ 	u16			request;
++	u16			flags;
+ 
+ #if IS_ENABLED(CONFIG_V4L2_MEM2MEM_DEV)
+ 	struct v4l2_m2m_ctx	*m2m_ctx;
+diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
+index d7607b7..2153abd 100644
+--- a/include/uapi/linux/videodev2.h
++++ b/include/uapi/linux/videodev2.h
+@@ -1675,6 +1675,7 @@ struct v4l2_querymenu {
+ #define V4L2_CTRL_FLAG_EXECUTE_ON_WRITE	0x0200
+ #define V4L2_CTRL_FLAG_MODIFY_LAYOUT	0x0400
+ #define V4L2_CTRL_FLAG_REQ_APPLIED	0x10000
++#define V4L2_CTRL_FLAG_REQ_KEEP		0x20000
+ 
+ /*  Query flags, to be ORed with the control ID */
+ #define V4L2_CTRL_FLAG_NEXT_CTRL	0x80000000
+@@ -2309,6 +2310,9 @@ struct v4l2_create_buffers {
+ #define V4L2_REQ_CMD_APPLY	(3)
+ #define V4L2_REQ_CMD_QUEUE	(4)
+ 
++/* Flag for V4L2_REQ_CMD_BEGIN */
++#define V4L2_REQ_CMD_BEGIN_FL_KEEP	(1 << 0)
++
+ struct v4l2_request_cmd {
+ 	__u32 cmd;
+ 	__u16 request;
+-- 
+2.7.4
+

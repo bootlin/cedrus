@@ -1,0 +1,81 @@
+From 610648acff6dbb2cd14f3174cdbceccbd109e440 Mon Sep 17 00:00:00 2001
+From: Icenowy Zheng <icenowy@aosc.xyz>
+Date: Fri, 26 Jan 2018 00:24:31 +0100
+Subject: [PATCH 20/21] ARM: dts: sun8i: add video engine support for A33
+
+A33 has a video engine just like the one in A13.
+
+Add the support for it in the device tree.
+
+Signed-off-by: Icenowy Zheng <icenowy@aosc.xyz>
+---
+ arch/arm/boot/dts/sun8i-a33.dtsi | 39 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 39 insertions(+)
+
+diff --git a/arch/arm/boot/dts/sun8i-a33.dtsi b/arch/arm/boot/dts/sun8i-a33.dtsi
+index 50eb84f..427165d 100644
+--- a/arch/arm/boot/dts/sun8i-a33.dtsi
++++ b/arch/arm/boot/dts/sun8i-a33.dtsi
+@@ -181,6 +181,21 @@
+ 		reg = <0x40000000 0x80000000>;
+ 	};
+ 
++	reserved-memory {
++		#address-cells = <1>;
++		#size-cells = <1>;
++		ranges;
++
++		ve_reserved: cma {
++			compatible = "shared-dma-pool";
++			no-map;
++			size = <0x4000000>;
++			alignment = <0x2000>;
++			alloc-ranges = <0x40000000 0x10000000>;
++			linux,cma-default;
++		};
++	};
++
+ 	sound: sound {
+ 		compatible = "simple-audio-card";
+ 		simple-audio-card,name = "sun8i-a33-audio";
+@@ -204,6 +219,11 @@
+ 	};
+ 
+ 	soc@1c00000 {
++		syscon: system-controller@01c00000 {
++			compatible = "allwinner,sun8i-a33-syscon", "syscon";
++			reg = <0x01c00000 0x1000>;
++		};
++
+ 		tcon0: lcd-controller@1c0c000 {
+ 			compatible = "allwinner,sun8i-a33-tcon";
+ 			reg = <0x01c0c000 0x1000>;
+@@ -240,6 +260,25 @@
+ 			};
+ 		};
+ 
++		ve: video-engine@01c0e000 {
++			compatible = "allwinner,sun5i-a13-video-engine";
++			memory-region = <&ve_reserved>;
++			syscon = <&syscon>;
++
++			clocks = <&ccu CLK_BUS_VE>, <&ccu CLK_VE>,
++				 <&ccu CLK_DRAM_VE>;
++			clock-names = "ahb", "mod", "ram";
++
++			assigned-clocks = <&ccu CLK_VE>;
++			assigned-clock-rates = <320000000>;
++
++			resets = <&ccu RST_BUS_VE>;
++
++			interrupts = <GIC_SPI 58 IRQ_TYPE_LEVEL_HIGH>;
++
++			reg = <0x01c0e000 0x1000>;
++		};
++
+ 		crypto: crypto-engine@1c15000 {
+ 			compatible = "allwinner,sun4i-a10-crypto";
+ 			reg = <0x01c15000 0x1000>;
+-- 
+2.7.4
+
