@@ -74,16 +74,25 @@ matrix:
       - CEDRUS_BUILD: driver
         KERNEL_VERSION: 4.14
     - env:
+      - CEDRUS_BUILD: driver
+        KERNEL_VERSION: 4.15
+    - env:
       - CEDRUS_BUILD: dtbs
         KERNEL_VERSION: 4.9
     - env:
       - CEDRUS_BUILD: dtbs
         KERNEL_VERSION: 4.14
     - env:
+      - CEDRUS_BUILD: dtbs
+        KERNEL_VERSION: 4.15
+    - env:
       - CEDRUS_BUILD: kernel
         KERNEL_VERSION: 4.9
     - env:
       - CEDRUS_BUILD: kernel
         KERNEL_VERSION: 4.14
+    - env:
+      - CEDRUS_BUILD: kernel
+        KERNEL_VERSION: 4.15
     - env:
       - CEDRUS_BUILD: libva
