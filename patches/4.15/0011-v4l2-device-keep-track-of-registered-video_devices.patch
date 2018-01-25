@@ -1,0 +1,96 @@
+From a41c7aeafa9233d1c8a18bb8e80574e409123b7a Mon Sep 17 00:00:00 2001
+From: Hans Verkuil <hans.verkuil@cisco.com>
+Date: Tue, 21 Apr 2015 09:58:34 +0200
+Subject: [PATCH 11/21] v4l2-device: keep track of registered video_devices
+
+In order to efficiently handle V4L2_REQ_CMD_QUEUE we need to know which
+video_device structs are registered for the given v4l2_device struct.
+
+So create a list of vdevs in v4l2_device and add/remove each video_device
+there as it is registered/unregistered.
+
+Signed-off-by: Hans Verkuil <hans.verkuil@cisco.com>
+---
+ drivers/media/v4l2-core/v4l2-dev.c    | 8 ++++++++
+ drivers/media/v4l2-core/v4l2-device.c | 1 +
+ include/media/v4l2-dev.h              | 3 +++
+ include/media/v4l2-device.h           | 4 ++++
+ 4 files changed, 16 insertions(+)
+
+diff --git a/drivers/media/v4l2-core/v4l2-dev.c b/drivers/media/v4l2-core/v4l2-dev.c
+index 623ed06..b9a4129 100644
+--- a/drivers/media/v4l2-core/v4l2-dev.c
++++ b/drivers/media/v4l2-core/v4l2-dev.c
+@@ -842,6 +842,8 @@ int __video_register_device(struct video_device *vdev, int type, int nr,
+ 	if (WARN_ON(!vdev->v4l2_dev))
+ 		return -EINVAL;
+ 
++	INIT_LIST_HEAD(&vdev->list);
++
+ 	/* v4l2_fh support */
+ 	spin_lock_init(&vdev->fh_lock);
+ 	INIT_LIST_HEAD(&vdev->fh_list);
+@@ -991,6 +993,9 @@ int __video_register_device(struct video_device *vdev, int type, int nr,
+ 
+ 	/* Part 6: Activate this minor. The char device can now be used. */
+ 	set_bit(V4L2_FL_REGISTERED, &vdev->flags);
++	spin_lock(&vdev->v4l2_dev->lock);
++	list_add_tail(&vdev->list, &vdev->v4l2_dev->vdevs);
++	spin_unlock(&vdev->v4l2_dev->lock);
+ 
+ 	return 0;
+ 
+@@ -1026,6 +1031,9 @@ void video_unregister_device(struct video_device *vdev)
+ 	 */
+ 	clear_bit(V4L2_FL_REGISTERED, &vdev->flags);
+ 	mutex_unlock(&videodev_lock);
++	spin_lock(&vdev->v4l2_dev->lock);
++	list_del(&vdev->list);
++	spin_unlock(&vdev->v4l2_dev->lock);
+ 	device_unregister(&vdev->dev);
+ }
+ EXPORT_SYMBOL(video_unregister_device);
+diff --git a/drivers/media/v4l2-core/v4l2-device.c b/drivers/media/v4l2-core/v4l2-device.c
+index 937c6de..7a6ac03 100644
+--- a/drivers/media/v4l2-core/v4l2-device.c
++++ b/drivers/media/v4l2-core/v4l2-device.c
+@@ -36,6 +36,7 @@ int v4l2_device_register(struct device *dev, struct v4l2_device *v4l2_dev)
+ 		return -EINVAL;
+ 
+ 	INIT_LIST_HEAD(&v4l2_dev->subdevs);
++	INIT_LIST_HEAD(&v4l2_dev->vdevs);
+ 	spin_lock_init(&v4l2_dev->lock);
+ 	v4l2_prio_init(&v4l2_dev->prio);
+ 	kref_init(&v4l2_dev->ref);
+diff --git a/include/media/v4l2-dev.h b/include/media/v4l2-dev.h
+index 28a686e..ad714d5 100644
+--- a/include/media/v4l2-dev.h
++++ b/include/media/v4l2-dev.h
+@@ -213,6 +213,9 @@ struct v4l2_file_operations {
+ 
+ struct video_device
+ {
++	/* links into v4l2_device vdevs list */
++	struct list_head list;
++
+ #if defined(CONFIG_MEDIA_CONTROLLER)
+ 	struct media_entity entity;
+ 	struct media_intf_devnode *intf_devnode;
+diff --git a/include/media/v4l2-device.h b/include/media/v4l2-device.h
+index f11f079..d288432 100644
+--- a/include/media/v4l2-device.h
++++ b/include/media/v4l2-device.h
+@@ -63,6 +63,10 @@ struct v4l2_device {
+ 	struct media_device *mdev;
+ #endif
+ 	struct list_head subdevs;
++	/* used to keep track of the registered video_devices */
++	struct list_head vdevs;
++	/* lock this struct; can be used by the driver as well if this
++	   struct is embedded into a larger struct. */
+ 	spinlock_t lock;
+ 	char name[V4L2_DEVICE_NAME_SIZE];
+ 	void (*notify)(struct v4l2_subdev *sd,
+-- 
+2.7.4
+
