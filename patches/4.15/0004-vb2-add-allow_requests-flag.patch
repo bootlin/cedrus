@@ -1,0 +1,54 @@
+From 716796315f673d8a47af2d677d02e05ab84ac944 Mon Sep 17 00:00:00 2001
+From: Hans Verkuil <hans.verkuil@cisco.com>
+Date: Tue, 21 Apr 2015 12:16:58 +0200
+Subject: [PATCH 04/21] vb2: add allow_requests flag
+
+The driver has to set allow_requests explicitly in order to allow
+queuing or preparing buffers for a specific request ID.
+
+Signed-off-by: Hans Verkuil <hans.verkuil@cisco.com>
+---
+ drivers/media/v4l2-core/videobuf2-v4l2.c | 5 +++++
+ include/media/videobuf2-core.h           | 3 +++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/drivers/media/v4l2-core/videobuf2-v4l2.c b/drivers/media/v4l2-core/videobuf2-v4l2.c
+index 7ee51f5..3473732 100644
+--- a/drivers/media/v4l2-core/videobuf2-v4l2.c
++++ b/drivers/media/v4l2-core/videobuf2-v4l2.c
+@@ -178,6 +178,11 @@ static int vb2_queue_or_prepare_buf(struct vb2_queue *q, struct v4l2_buffer *b,
+ 		return -EINVAL;
+ 	}
+ 
++	if (!q->v4l2_allow_requests && b->request) {
++		dprintk(1, "%s: unsupported request ID\n", opname);
++		return -EINVAL;
++	}
++
+ 	return __verify_planes_array(q->bufs[b->index], b);
+ }
+ 
+diff --git a/include/media/videobuf2-core.h b/include/media/videobuf2-core.h
+index ef9b643..555cfdf 100644
+--- a/include/media/videobuf2-core.h
++++ b/include/media/videobuf2-core.h
+@@ -498,6 +498,8 @@ struct vb2_buf_ops {
+  * @last_buffer_dequeued: used in poll() and DQBUF to immediately return if the
+  *		last decoded buffer was already dequeued. Set for capture queues
+  *		when a buffer with the V4L2_BUF_FLAG_LAST is dequeued.
++ * @v4l2_allow_requests: allow request != 0 to be passed to the driver, V4L2
++ *		specific.
+  * @fileio:	file io emulator internal data, used only if emulator is active
+  * @threadio:	thread io internal data, used only if thread is active
+  */
+@@ -550,6 +552,7 @@ struct vb2_queue {
+ 	unsigned int			is_output:1;
+ 	unsigned int			copy_timestamp:1;
+ 	unsigned int			last_buffer_dequeued:1;
++	unsigned int			v4l2_allow_requests:1;
+ 
+ 	struct vb2_fileio_data		*fileio;
+ 	struct vb2_threadio_data	*threadio;
+-- 
+2.7.4
+

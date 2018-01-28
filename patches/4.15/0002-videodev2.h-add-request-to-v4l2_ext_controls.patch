@@ -1,0 +1,40 @@
+From c19cbebdce69c22f75ce375206bb4d44df0f8d2d Mon Sep 17 00:00:00 2001
+From: Hans Verkuil <hans.verkuil@cisco.com>
+Date: Mon, 16 Dec 2013 16:45:24 +0100
+Subject: [PATCH 02/21] videodev2.h: add request to v4l2_ext_controls
+
+The ctrl_class is fairly pointless when used with drivers that use the control
+framework: you can just fill in 0 and it will just work fine. There are still
+some old unconverted drivers that do not support 0 and instead want the control
+class there. The idea being that all controls in the list all belong to that
+class. This was done to simplify drivers in the absence of the control framework.
+
+When using the control framework the framework itself is smart enough to allow
+controls of any class to be included in the control list.
+
+Since request IDs are in the range 1..65535 (or so, in any case a relatively
+small non-zero positive integer) it makes sense to effectively rename ctrl_class
+to request. Set it to 0 and you get the normal behavior (you change the current
+control value), set it to a request ID and you get/set the control for
+that request.
+
+Signed-off-by: Hans Verkuil <hans.verkuil@cisco.com>
+---
+ include/uapi/linux/videodev2.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
+index d091ffa..4a32d88 100644
+--- a/include/uapi/linux/videodev2.h
++++ b/include/uapi/linux/videodev2.h
+@@ -1581,6 +1581,7 @@ struct v4l2_ext_controls {
+ 		__u32 ctrl_class;
+ #endif
+ 		__u32 which;
++		__u32 request;
+ 	};
+ 	__u32 count;
+ 	__u32 error_idx;
+-- 
+2.7.4
+
